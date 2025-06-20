@@ -6690,7 +6690,16 @@ static s32 hevc_parse_pic_timing_sei(GF_BitStream *bs, HEVCState *hevc)
 	return 0;
 }
 
-static void avc_parse_itu_t_t35_sei(GF_BitStream* bs, AVCSeiItuTT35DolbyVision *dovi)
+#define ITU_T_T35_CHINA           0x26
+#define ITU_T_T35_CHINA_UWA       0x0004
+#define ITU_T_T35_CHINA_UWA_Vivid 0x0005
+
+#define ITU_T_T35_UNITED_STATES   0xB5
+#define ITU_T_T35_USA_Dolby       0x0031
+#define ITU_T_T35_USA_Samsung     0x0032
+#define ITU_T_T35_USA_Technicolor 0x003A
+
+static void avc_parse_itu_t_t35_sei(GF_BitStream* bs, AVCSeiItuTT35DolbyVision *dovi, AVCSeiItuTT35HDRDMIFormats *hdr_dmi)
 {
 	u8 itu_t_t35_country_code = gf_bs_read_u8(bs);
 	u16 terminal_provider_code = gf_bs_read_u16(bs);
@@ -6698,6 +6707,30 @@ static void avc_parse_itu_t_t35_sei(GF_BitStream* bs, AVCSeiItuTT35DolbyVision *
 	u8 data_type_code = gf_bs_read_u8(bs);
 	if (itu_t_t35_country_code == 0xB5 && terminal_provider_code == 0x31 && user_id == 0x47413934 && (data_type_code == 0x8 || data_type_code == 0x9)) {
 		dovi->rpu_flag = GF_TRUE;
+		hdr_dmi->isDolbyVision = GF_TRUE;
+	}
+	else {
+		if (itu_t_t35_country_code == ITU_T_T35_UNITED_STATES && terminal_provider_code == ITU_T_T35_USA_Samsung) {
+			// refer to Annexex S of CTA-861-H
+			u16 terminal_provider_oriented_code = (user_id & 0xFFFF0000) >> 16;
+			if (terminal_provider_oriented_code == 0x01) {
+				hdr_dmi->isHDR10plus = GF_TRUE;
+			}
+		}
+		if (itu_t_t35_country_code == ITU_T_T35_UNITED_STATES && terminal_provider_code == ITU_T_T35_USA_Technicolor) {
+			// refer to Annex A.2.2 of ETSI TS 103 433-1
+			u8 terminal_provider_oriented_code_message_idc = (user_id & 0xFF000000) >> 24;
+			if (terminal_provider_oriented_code_message_idc == 0x00) {
+				hdr_dmi->isSLHDR = GF_TRUE;
+			}
+		}
+		if (itu_t_t35_country_code == ITU_T_T35_CHINA && terminal_provider_code == ITU_T_T35_CHINA_UWA) {
+			// refer to clause 6 of T/UWA 005.2-1
+			u16 terminal_provider_oriented_code = (user_id & 0xFFFF0000) >> 16;
+			if (terminal_provider_oriented_code == 0x05) {
+				hdr_dmi->isHDRVivid = GF_TRUE;
+			}
+		}
 	}
 }
 
@@ -8630,7 +8663,7 @@ static void gf_hevc_vvc_parse_sei(char *buffer, u32 nal_size, HEVCState *hevc, V
 		sei->has_3d_ref_disp_info = 0;
 		switch (ptype) {
 		case 4: /*user registered ITU-T T35*/
-			avc_parse_itu_t_t35_sei(bs, &sei->dovi);
+			avc_parse_itu_t_t35_sei(bs, &sei->dovi, &sei->hdr_dmi);
 			break;
 		//clli
 		case 144:

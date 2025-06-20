@@ -252,10 +252,21 @@ typedef struct
 
 typedef struct
 {
+	Bool isDolbyVision;
+	Bool isSLHDR;
+	Bool isHDR10plus;
+	Bool isHDRVivid;
+} AVCSeiItuTT35HDRDMIFormats;
+
+#define IS_HDR_DMI_SEI(sei) (sei.hdr_dmi.isDolbyVision == GF_TRUE || sei.hdr_dmi.isSLHDR == GF_TRUE || sei.hdr_dmi.isHDR10plus == GF_TRUE || sei.hdr_dmi.isHDRVivid == GF_TRUE)
+
+typedef struct
+{
 	AVCSeiRecoveryPoint recovery_point;
 	//valid if num_clock_ts is set
 	AVCSeiPicTiming pic_timing;
 	AVCSeiItuTT35DolbyVision dovi;
+	AVCSeiItuTT35HDRDMIFormats hdr_dmi;
 
 	u8 clli_data[4];
 	u8 mdcv_data[24];

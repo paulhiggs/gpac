@@ -914,6 +914,7 @@ static MP4BoxArg m4b_imp_fileopt_args [] = {
 	GF_DEF_ARG("proll", NULL, "`S` add a preroll sample group with roll_distance `N`", NULL, NULL, GF_ARG_INT, 0),
 	GF_DEF_ARG("mpeg4", NULL, "`X` same as [-mpeg4]() option", NULL, NULL, GF_ARG_BOOL, 0),
 	GF_DEF_ARG("nosei", NULL, "discard all SEI messages during import", NULL, NULL, GF_ARG_BOOL, 0),
+	GF_DEF_ARG("nosei", NULL, "discard all SEI messages that contain HDR DMI during import", NULL, NULL, GF_ARG_BOOL, 0),
 	GF_DEF_ARG("svc", NULL, "import SVC/LHVC with explicit signaling (no AVC base compatibility)", NULL, NULL, GF_ARG_BOOL, 0),
 	GF_DEF_ARG("nosvc", NULL, "discard SVC/LHVC data when importing", NULL, NULL, GF_ARG_BOOL, 0),
 	GF_DEF_ARG("svcmode", NULL, "`DS` set SVC/LHVC import mode. Value can be:\n"

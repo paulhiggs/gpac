@@ -70,7 +70,7 @@ typedef struct
 	//filter args
 	GF_Fraction fps;
 	Double index;
-	Bool explicit, force_sync, nosei, importer, subsamples, nosvc, novpsext, deps, seirw, audelim, analyze, notime, refs;
+	Bool explicit, force_sync, nosei, nohdrdmi, importer, subsamples, nosvc, novpsext, deps, seirw, audelim, analyze, notime, refs;
 	u32 nal_length;
 	GF_GOPBufferingMode strict_poc;
 	u32 bsdbg;
@@ -2565,11 +2565,13 @@ static s32 naludmx_parse_nal_hevc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool
 		if (ctx->hevc_state->sei.alternative_transfer_characteristics && ctx->opid) {
 			gf_filter_pid_set_property(ctx->opid, GF_PROP_PID_COLR_TRANSFER_ALT, & PROP_UINT(ctx->hevc_state->sei.alternative_transfer_characteristics) );
 		}
-		if (!ctx->nosei) {
+		//GF_LOG(GF_LOG_WARNING, GF_LOG_CONTAINER, ("[PH] HEVC SEI handler\n"));
+		if (ctx->nosei ||(!ctx->nosei && ctx->nohdrdmi && IS_HDR_DMI_SEI(ctx->hevc_state->sei))) {
+			ctx->nb_nalus--;
+		}
+		else {
 			ctx->nb_sei++;
 			naludmx_push_prefix(ctx, data, size, GF_FALSE);
-		} else {
-			ctx->nb_nalus--;
 		}
 		*skip_nal = GF_TRUE;
 		break;
@@ -2769,12 +2771,13 @@ static s32 naludmx_parse_nal_vvc(GF_NALUDmxCtx *ctx, char *data, u32 size, Bool 
 		break;
 	case GF_VVC_NALU_SEI_PREFIX:
 		gf_vvc_parse_sei(data, size, ctx->vvc_state);
-		if (!ctx->nosei) {
+		if (ctx->nosei || (!ctx->nosei && ctx->nohdrdmi && IS_HDR_DMI_SEI(ctx->vvc_state->sei))) {
+			ctx->nb_nalus--;
+		}
+		else {
 			ctx->nb_sei++;
 
 			naludmx_push_prefix(ctx, data, size, GF_FALSE);
-		} else {
-			ctx->nb_nalus--;
 		}
 		*skip_nal = GF_TRUE;
 		break;
@@ -4383,6 +4386,7 @@ static const GF_FilterArgs NALUDmxArgs[] =
 		"- on: enable GOP buffering, assuming no error in POC\n"
 		"- error: enable GOP buffering and try to detect lost frames", GF_PROP_UINT, "off", "off|on|error", GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(nosei), "remove all sei messages", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
+	{ OFFS(nohdrdmi), "remove all sei messages that contain HDR DMI", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(nosvc), "remove all SVC/MVC/LHVC data", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(novpsext), "remove all VPS extensions", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},
 	{ OFFS(importer), "compatibility with old importer, displays import results", GF_PROP_BOOL, "false", NULL, GF_FS_ARG_HINT_ADVANCED},

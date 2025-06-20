@@ -999,6 +999,7 @@ reparse_opts:
 		else if (!stricmp(ext+1, "psx")) { CHECK_FAKEIMPORT("psx") import_flags |= GF_IMPORT_PS_EXPLICIT; }
 		else if (!stricmp(ext+1, "mpeg4")) { CHECK_FAKEIMPORT("mpeg4") import_flags |= GF_IMPORT_FORCE_MPEG4; }
 		else if (!stricmp(ext+1, "nosei")) { CHECK_FAKEIMPORT("nosei") import_flags |= GF_IMPORT_NO_SEI; }
+		else if (!stricmp(ext+1, "nohdrdmi")) { CHECK_FAKEIMPORT("nohdrdmi") import_flags |= GF_IMPORT_NO_HDR_DMI; }
 		else if (!stricmp(ext+1, "svc") || !stricmp(ext+1, "lhvc") ) { CHECK_FAKEIMPORT("svc/lhvc") import_flags |= GF_IMPORT_SVC_EXPLICIT; }
 		else if (!stricmp(ext+1, "nosvc") || !stricmp(ext+1, "nolhvc")) { CHECK_FAKEIMPORT("nosvc/nolhvc") import_flags |= GF_IMPORT_SVC_NONE; }
 		else if (!stricmp(ext+1, "extk")) {

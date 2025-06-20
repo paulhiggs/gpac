@@ -258,7 +258,9 @@ enum
 	GF_IMPORT_KEEP_AV1_TEMPORAL_OBU  = 1<<28,
 	/*! imports sample dependencies information*/
 	GF_IMPORT_SAMPLE_DEPS  = 1<<29,
-	
+	/* when set no SEI messages that contains HDR DMI are imported */
+	GF_IMPORT_NO_HDR_DMI = 1 << 30,
+
 	//GF_IMPORT_FILTER_STATS = 0x80000000	//(=1<<31)
 };
 
