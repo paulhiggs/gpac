@@ -2,7 +2,7 @@
  *			GPAC - Multimedia Framework C SDK
  *
  *			Authors: Jean Le Feuvre
- *			Copyright (c) Telecom ParisTech 2018-2024
+ *			Copyright (c) Telecom ParisTech 2018-2025
  *					All rights reserved
  *
  *  This file is part of GPAC / ffmpeg encode filter
@@ -67,6 +67,7 @@ typedef struct _gf_ffenc_ctx
 
 	u32 nb_frames_out, nb_frames_in;
 	u64 time_spent;
+	u64 orig_cts_plus_one;
 
 	u32 low_delay_mode;
 
@@ -77,6 +78,8 @@ typedef struct _gf_ffenc_ctx
 	u32 flush_done;
 	//frame used by both video and audio encoder
 	AVFrame *frame;
+	//ffmpeg codecid forced by output
+	u32 forced_ffcid;
 
 	//encoding buffer - we allocate ENC_BUF_ALLOC_SAFE+WxH for the video (some image codecs in ffmpeg require more than WxH for headers), ENC_BUF_ALLOC_SAFE+nb_ch*samplerate for the audio
 	//this should be enough to hold any lossless compression formats
@@ -195,6 +198,7 @@ static GF_Err ffenc_initialize(GF_Filter *filter)
 
 	if (!ctx->c) return GF_OK;
 
+	ctx->forced_ffcid = AV_CODEC_ID_NONE;
 	//first look by name, to handle cases such as "aac" vs "vo_aacenc"
 	ctx->force_codec = avcodec_find_encoder_by_name(ctx->c);
 	if (ctx->force_codec) {
@@ -266,6 +270,12 @@ static void ffenc_copy_pid_props(GF_FFEncodeCtx *ctx)
 		}
 	} else {
 		gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_CODECID, &PROP_UINT(ctx->codecid) );
+		if (ctx->codecid==GF_CODECID_FFMPEG) {
+			if (ctx->encoder)
+				gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_META_DEMUX_CODEC_ID, &PROP_UINT(ctx->encoder->codec->id) );
+			else if (ctx->forced_ffcid)
+				gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_META_DEMUX_CODEC_ID, &PROP_UINT(ctx->forced_ffcid) );
+		}
 	}
 	gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_ISOM_SUBTYPE, NULL);
 	gf_filter_pid_set_property(ctx->out_pid, GF_PROP_PID_PROFILE_LEVEL, NULL);
@@ -338,7 +348,7 @@ static void ffenc_copy_pid_props(GF_FFEncodeCtx *ctx)
 
 static GFINLINE void ffenc_set_deps(GF_FilterPacket *dst_pck, AVPacket *pkt)
 {
-	//reset dependency flags to unknwon
+	//reset dependency flags to unknown
 	u8 flags = 0;
 #if LIBAVCODEC_VERSION_MAJOR >= 58
 	if (pkt->flags & AV_PKT_FLAG_DISPOSABLE) {
@@ -522,6 +532,12 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 	//check if we need to force a closed gop
 	if (pck && (ctx->fintra.den && (ctx->fintra.num>0)) && !ctx->force_reconfig) {
 		u64 cts = ffenc_get_cts(ctx, pck);
+		//if we have a first encoded frame, use it as our anchor point and reset
+		//we only do this on first setup
+		if (ctx->orig_cts_plus_one) {
+			cts = ctx->orig_cts_plus_one - 1;
+			ctx->orig_cts_plus_one = 0;
+		}
 		if (!ctx->fintra_setup) {
 			ctx->fintra_setup = GF_TRUE;
 			ctx->orig_ts = cts;
@@ -541,8 +557,13 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 			}
 		}
 	}
-	if (!ctx->nb_frames_in)
+
+	if (!ctx->nb_frames_in) {
 		force_intra = 0;
+		//remember timing of first encoded frame
+		if (pck)
+			ctx->orig_cts_plus_one = ffenc_get_cts(ctx, pck) + 1;
+	}
 
 	if (force_intra) {
 		if (ctx->args_updated) {
@@ -611,12 +632,25 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 		}
 		if (pck) {
 			ilaced = gf_filter_pck_get_interlaced(pck);
+#if (LIBAVFORMAT_VERSION_MAJOR < 62)
 			if (!ilaced) {
 				ctx->frame->interlaced_frame = 0;
 			} else {
 				ctx->frame->interlaced_frame = 1;
 				ctx->frame->top_field_first = (ilaced==2) ? 1 : 0;
 			}
+#else
+			if (!ilaced) {
+				ctx->frame->flags &= ~AV_FRAME_FLAG_INTERLACED;
+			} else {
+				ctx->frame->flags |= AV_FRAME_FLAG_INTERLACED;
+				if (ilaced==2) {
+					ctx->frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+				} else {
+					ctx->frame->flags &= ~AV_FRAME_FLAG_TOP_FIELD_FIRST;
+				}
+			}
+#endif
 			ctx->frame->pts = ffenc_get_cts(ctx, pck);
 			ctx->frame->_avf_dur = gf_filter_pck_get_duration(pck);
 		}
@@ -729,7 +763,7 @@ static GF_Err ffenc_process_video(GF_Filter *filter, struct _gf_ffenc_ctx *ctx)
 				ctx->reconfig_pending = GF_FALSE;
 				ctx->force_reconfig = GF_FALSE;
 				GF_LOG(GF_LOG_DEBUG, GF_LOG_CODEC, ("[FFEnc] codec flush done, triggering reconfiguration\n"));
-				avcodec_close(ctx->encoder);
+				avcodec_free_context(&ctx->encoder);
 				ctx->encoder = NULL;
 				ctx->setup_failed = 0;
 				e = ffenc_configure_pid_ex(filter, ctx->in_pid, GF_FALSE, GF_TRUE);
@@ -1421,6 +1455,11 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 		prop = gf_filter_pid_caps_query(pid, GF_PROP_PID_CODECID);
 		if (prop) {
 			ctx->codecid = prop->value.uint;
+			if (ctx->codecid==GF_CODECID_FFMPEG) {
+				prop = gf_filter_pid_caps_query(pid, GF_PROP_PID_META_DEMUX_CODEC_ID);
+				if (!prop) return GF_NOT_SUPPORTED;
+				ctx->forced_ffcid = prop->value.uint;
+			}
 		} else if (!ctx->codecid && ctx->c) {
 			ctx->codecid = gf_codecid_parse(ctx->c);
 			if (!ctx->codecid) {
@@ -1435,6 +1474,13 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	}
 
 	if (!ctx->codecid && !desired_codec) {
+		if (gf_filter_is_dynamic(filter)) {
+			ctx->in_pid = pid;
+			if (!ctx->out_pid) {
+				ctx->out_pid = gf_filter_pid_new(filter);
+			}
+			return GF_OK;
+		}
 		GF_LOG(GF_LOG_ERROR, GF_LOG_CODEC, ("[FFEnc] No codecid specified\n" ));
 		return GF_BAD_PARAM;
 	}
@@ -1453,7 +1499,10 @@ static GF_Err ffenc_configure_pid_ex(GF_Filter *filter, GF_FilterPid *pid, Bool 
 	}
 
 	if (ctx->codecid) {
-		codec_id = ffmpeg_codecid_from_gpac(ctx->codecid, &ff_codectag);
+		if (ctx->forced_ffcid)
+			codec_id = ctx->forced_ffcid;
+		else
+			codec_id = ffmpeg_codecid_from_gpac(ctx->codecid, &ff_codectag);
 		if (codec_id) {
 			if (desired_codec && desired_codec->id==codec_id)
 				codec = desired_codec;
@@ -2235,8 +2284,10 @@ static Bool ffenc_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		if (evt->encode_hints.gen_dsi_only) {
 			ctx->generate_dsi_only = GF_TRUE;
 		}
-		else if ((ctx->fintra.num<0) && evt->encode_hints.intra_period.den && evt->encode_hints.intra_period.num) {
+		//change in fintra
+		else if (ctx->fintra.num * evt->encode_hints.intra_period.den != ctx->fintra.den * evt->encode_hints.intra_period.num) {
 			ctx->fintra = evt->encode_hints.intra_period;
+			ctx->fintra_setup = GF_FALSE;
 
 			if (!ctx->rc || (gf_list_count(ctx->src_packets) && !ctx->force_reconfig)) {
 				ctx->reconfig_pending = GF_TRUE;
@@ -2245,7 +2296,27 @@ static Bool ffenc_process_event(GF_Filter *filter, const GF_FilterEvent *evt)
 		}
 		return GF_TRUE;
 	}
+	else if (evt->base.type==GF_FEVT_STOP) {
+		ctx->nb_frames_in = ctx->nb_frames_out = 0;
+	}
 	return GF_FALSE;
+}
+
+static GF_Err ffenc_reconfigure_output(GF_Filter *filter, GF_FilterPid *pid)
+{
+	const GF_PropertyValue *p;
+	GF_FFEncodeCtx *ctx = gf_filter_get_udta(filter);
+	if (ctx->out_pid != pid) return GF_BAD_PARAM;
+
+	p = gf_filter_pid_caps_query(pid, GF_PROP_PID_CODECID);
+	if (p) ctx->codecid = p->value.uint;
+
+	ctx->forced_ffcid = AV_CODEC_ID_NONE;
+	if (ctx->codecid==GF_CODECID_FFMPEG) {
+		p = gf_filter_pid_caps_query(pid, GF_PROP_PID_META_DEMUX_CODEC_ID);
+		if (p) ctx->forced_ffcid = p->value.uint;
+	}
+	return ffenc_configure_pid_ex(filter, ctx->in_pid, GF_FALSE, GF_FALSE);
 }
 
 static const GF_FilterCapability FFEncodeCaps[] =
@@ -2261,6 +2332,9 @@ static const GF_FilterCapability FFEncodeCaps[] =
 	CAP_BOOL(GF_CAPS_INPUT_EXCLUDED, GF_PROP_PID_UNFRAMED, GF_TRUE),
 	CAP_UINT(GF_CAPS_INPUT, GF_PROP_PID_CODECID, GF_CODECID_RAW),
 	CAP_UINT(GF_CAPS_OUTPUT_EXCLUDED, GF_PROP_PID_CODECID, GF_CODECID_RAW),
+	{0},
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_CODECID, 0),
+	CAP_UINT(GF_CAPFLAG_RECONFIG, GF_PROP_PID_META_DEMUX_CODEC_ID, 0),
 };
 
 GF_FilterRegister FFEncodeRegister = {
@@ -2303,6 +2377,7 @@ GF_FilterRegister FFEncodeRegister = {
 	.process = ffenc_process,
 	.process_event = ffenc_process_event,
 	.update_arg = ffenc_update_arg,
+	.reconfigure_output = ffenc_reconfigure_output,
 	.flags = GF_FS_REG_META | GF_FS_REG_TEMP_INIT | GF_FS_REG_BLOCK_MAIN,
 	//use middle priority in case we have other encoders
 	.priority = 128,
